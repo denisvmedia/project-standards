@@ -109,7 +109,7 @@
       },
 
       "no-merge-conflicts": {
-        "run": "git grep -E '^(<<<<<<<|=======|>>>>>>>)' && exit 1 || exit 0",
+        "run": "git --no-pager grep -E '^(<<<<<<<|=======|>>>>>>>)' && exit 1 || exit 0",
       },
 
       "no-shell-scripts": {
