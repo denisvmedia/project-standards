@@ -84,3 +84,26 @@ Validate locally with `project-standards fix && project-standards check`.
 
 `project-standards conform` writes all of these from the templates, and the
 weekly conformance workflow runs it for opted-in projects.
+
+## Database schema deployment
+
+Cloud Run projects with `db/schema.hcl` use Atlas by default. A project can
+select Ptah Compat and supply HCL variables in `mklv.config.json`:
+
+```json
+{
+  "database": {
+    "tool": "ptah",
+    "vars": { "app_role": "tasks-role" }
+  }
+}
+```
+
+The reusable workflow pins the Ptah release and archive SHA-256. It installs
+`ptah-compat` as `atlas`, keeping the existing command interface. Ptah previews
+HCL through `schema apply --dry-run` and applies the same schema without a dev
+database. Atlas keeps its existing `schema diff` and dev-database path.
+Both tools receive the same variables for preview and apply, and both retain
+the existing guard that stops deployment on destructive schema changes.
+Project callers stay generated; do not edit `.github/workflows/cicd.yaml` to
+select the database tool.

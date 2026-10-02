@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 // FileName is the one hand-edited configuration file in a project.
@@ -34,10 +35,33 @@ type Project struct {
 	Runtime *Runtime `json:"runtime,omitempty"`
 	// Kind is what the project produces and how it ships: one of Kinds.
 	Kind string `json:"kind,omitempty"`
+	// Database selects the Cloud Run schema tool and HCL variables.
+	Database *Database `json:"database,omitempty"`
 	// Tools maps a tool name, one of Tools, to its override tree.
 	Tools map[string]any `json:"tools,omitempty"`
 	// Ignore holds additions to the universal ignore files.
 	Ignore *Ignore `json:"ignore,omitempty"`
+}
+
+// Database configures schema deployment. An empty Tool keeps Atlas.
+type Database struct {
+	Tool string            `json:"tool,omitempty"`
+	Vars map[string]string `json:"vars,omitempty"`
+}
+
+func (d *Database) validate() error {
+	if d == nil {
+		return nil
+	}
+	if d.Tool != "" && d.Tool != "atlas" && d.Tool != "ptah" {
+		return fmt.Errorf("database.tool %q must be atlas or ptah", d.Tool)
+	}
+	for key, value := range d.Vars {
+		if key == "" || strings.ContainsAny(key, "=\x00") || strings.ContainsRune(value, '\x00') {
+			return errors.New("database.vars requires nonempty names without '=' and values without NUL bytes")
+		}
+	}
+	return nil
 }
 
 // Runtime is the deployed service's runtime settings.
@@ -86,6 +110,9 @@ func Parse(data []byte) (*Project, error) {
 	}
 	if p.Kind != "" && !slices.Contains(Kinds, p.Kind) {
 		return nil, fmt.Errorf("kind %q is not one of %v", p.Kind, Kinds)
+	}
+	if err := p.Database.validate(); err != nil {
+		return nil, err
 	}
 	for name, v := range p.Tools {
 		if !slices.Contains(Tools, name) {

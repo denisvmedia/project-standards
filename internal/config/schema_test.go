@@ -31,8 +31,9 @@ func TestSchemaMatchesProject(t *testing.T) {
 		t.Errorf("schema properties = %v, Project fields = %v", got, want)
 	}
 	for field, typ := range map[string]reflect.Type{
-		"runtime": reflect.TypeFor[Runtime](),
-		"ignore":  reflect.TypeFor[Ignore](),
+		"runtime":  reflect.TypeFor[Runtime](),
+		"database": reflect.TypeFor[Database](),
+		"ignore":   reflect.TypeFor[Ignore](),
 	} {
 		got, want := sortedKeys(schema.Properties[field].Properties), jsonFields(typ)
 		if !slices.Equal(got, want) {

@@ -6,7 +6,7 @@
 #   release svu picks the next version from Conventional Commits and
 #           `project-standards changelog` writes the notes; cli projects release
 #           binaries with goreleaser, everything else gets a gh release
-#   deploy  cloudrun: image build, Atlas schema apply, Cloud Run deploy
+#   deploy  cloudrun: image build, schema apply, Cloud Run deploy
 #           infra:    terramate apply
 #   notify  posts every main-branch result, pass or fail, to Discord #deploys,
 #           with the run's warning and notice annotations (deprecations,
@@ -42,6 +42,8 @@ env:
   WIF_INFRA_SA: github-actions-infra@mklv-infrastructure.iam.gserviceaccount.com
   SVU: github.com/caarlos0/svu/v3@v3.4.1
   GORELEASER: github.com/goreleaser/goreleaser/v2@v2.18.2
+  PTAH_VERSION: 0.11.4
+  PTAH_SHA256: de0f2d49570ed57545b50b6d4de83e5891847a79921d0ecef262467bdb38a53b
 
 concurrency:
   group: cicd-${{ github.repository }}-${{ github.ref }}
@@ -267,27 +269,66 @@ jobs:
           # underscores.
           echo "schema_name=$(echo "$NAME" | tr '-' '_')" >> "$GITHUB_OUTPUT"
 
+          tool=atlas
+          if [ -f mklv.config.json ]; then
+            tool=$(jq -r '.database.tool // "atlas"' mklv.config.json)
+          fi
+          echo "tool=${tool:-atlas}" >> "$GITHUB_OUTPUT"
+
           config_json=$(gcloud secrets versions access latest --secret="${NAME}-config" --project="$GCP_PROJECT")
           DATABASE_URL_SESSION=$(echo "$config_json" | jq -r '.DATABASE_URL_SESSION')
           echo "::add-mask::$DATABASE_URL_SESSION"
           echo "database_url_session=$DATABASE_URL_SESSION" >> "$GITHUB_OUTPUT"
 
       - name: Atlas Setup
-        if: steps.schema.outputs.skip != 'true'
+        if: steps.schema.outputs.skip != 'true' && steps.schema.outputs.tool == 'atlas'
         uses: ariga/setup-atlas@v0
 
-      - name: Atlas Schema Apply
+      - name: Ptah Setup
+        if: steps.schema.outputs.skip != 'true' && steps.schema.outputs.tool == 'ptah'
+        run: |
+          archive="ptah_${PTAH_VERSION}_linux_amd64.tar.gz"
+          curl --fail --location --retry 3 \
+            "https://github.com/stokaro/ptah/releases/download/v${PTAH_VERSION}/${archive}" \
+            --output "$RUNNER_TEMP/$archive"
+          printf '%s  %s\n' "$PTAH_SHA256" "$RUNNER_TEMP/$archive" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/ptah"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/ptah"
+          # The compatibility binary accepts the existing Atlas command names.
+          sudo install "$RUNNER_TEMP/ptah/ptah-compat" /usr/local/bin/atlas
+          sudo install -D "$RUNNER_TEMP/ptah/LICENSE" /usr/share/licenses/ptah/LICENSE
+
+      - name: DB Schema Apply
         if: steps.schema.outputs.skip != 'true'
         env:
           URL: ${{ steps.schema.outputs.database_url_session }}
           SCHEMA: ${{ steps.schema.outputs.schema_name }}
+          TOOL: ${{ steps.schema.outputs.tool }}
         run: |
-          atlas schema diff \
-            --from "$URL" \
-            --to file://db/schema.hcl \
-            --dev-url "docker://postgres/15/dev?search_path=public" \
-            --schema "$SCHEMA" \
-            --format '{{ sql . "  " }}' > /tmp/migration.sql
+          schema_vars=()
+          if [ -f mklv.config.json ]; then
+            jq -j '.database.vars // {} | to_entries[] | "--var\u0000", (.key + "=" + .value + "\u0000")' \
+              mklv.config.json > "$RUNNER_TEMP/schema-vars"
+            while IFS= read -r -d '' value; do
+              schema_vars+=("$value")
+            done < "$RUNNER_TEMP/schema-vars"
+          fi
+          dev_args=()
+          case "$TOOL" in
+            ptah)
+              # HCL can be planned directly; use the same path for preview and apply.
+              atlas schema apply --dry-run --url "$URL" \
+                --to file://db/schema.hcl --schema "$SCHEMA" "${schema_vars[@]}" \
+                --format '{{ sql . "  " }}' > /tmp/migration.sql
+              ;;
+            atlas)
+              dev_args=(--dev-url "docker://postgres/15/dev?search_path=public")
+              atlas schema diff --from "$URL" --to file://db/schema.hcl \
+                "${dev_args[@]}" --schema "$SCHEMA" "${schema_vars[@]}" \
+                --format '{{ sql . "  " }}' > /tmp/migration.sql
+              ;;
+            *) echo "::error::Unknown database tool: $TOOL"; exit 1 ;;
+          esac
 
           echo "Planned changes:"
           cat /tmp/migration.sql
@@ -300,8 +341,9 @@ jobs:
           atlas schema apply \
             --url "$URL" \
             --to file://db/schema.hcl \
-            --dev-url "docker://postgres/15/dev?search_path=public" \
+            "${dev_args[@]}" \
             --schema "$SCHEMA" \
+            "${schema_vars[@]}" \
             --auto-approve
 
       - name: Cloud Run Deploy

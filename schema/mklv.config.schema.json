@@ -42,6 +42,33 @@
       "description": "What the project produces and how it ships (ADR 0006).",
       "enum": ["cli", "cloudrun", "library", "infra"]
     },
+    "database": {
+      "description": "Cloud Run schema deployment. Defaults to Atlas when omitted.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "description": "Schema CLI. Ptah uses the release pinned by the reusable workflow.",
+          "enum": [
+            "atlas",
+            "ptah",
+            ""
+          ]
+        },
+        "vars": {
+          "description": "HCL variable values passed to both preview and apply.",
+          "type": "object",
+          "propertyNames": {
+            "minLength": 1,
+            "pattern": "^[^=\u0000]+$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[^\u0000]*$"
+          }
+        }
+      }
+    },
     "tools": {
       "description": "Overrides merged onto each tool's base config. Objects merge deeply, lists are appended, {\"replace\": [...]} replaces a list, and null removes a key.",
       "type": "object",
