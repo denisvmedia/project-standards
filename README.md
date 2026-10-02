@@ -103,7 +103,8 @@ The reusable workflow pins the Ptah release and archive SHA-256. It installs
 `ptah-compat` as `atlas`, keeping the existing command interface. Ptah previews
 HCL through `schema apply --dry-run` and applies the same schema without a dev
 database. Atlas keeps its existing `schema diff` and dev-database path.
-Both tools receive the same variables for preview and apply, and both retain
+Variable assignments are CSV-encoded for both CLIs, preserving commas, quotes,
+and line breaks. Preview and apply receive the same variables and retain
 the existing guard that stops deployment on destructive schema changes.
 Project callers stay generated; do not edit `.github/workflows/cicd.yaml` to
 select the database tool.

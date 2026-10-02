@@ -2,9 +2,12 @@ package config
 
 import (
 	"bytes"
+	"encoding/csv"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -40,7 +43,8 @@ func TestDatabaseWorkflow(t *testing.T) {
 	}{
 		{"Atlas unchanged", "atlas", "CREATE TABLE example(id int);", "", false, 2},
 		{"Ptah production role", "ptah", "CREATE POLICY tenant ON tasks;", `{"database":{"tool":"ptah","vars":{"app_role":"tasks-role"}}}`, false, 2},
-		{"literal variables", "ptah", "", `{"database":{"vars":{"value":"a b\n$(touch injected)"}}}`, false, 2},
+		{"literal variables", "ptah", "", `{"database":{"vars":{"value":"a,b=second \"quoted\"\n$(touch injected)\n", "empty":"", "unicode":"naïve"}}}`, false, 2},
+		{"Atlas literal variables", "atlas", "", `{"database":{"vars":{"value":"a,b=second \"quoted\"\n$(touch injected)\n", "empty":"", "unicode":"naïve"}}}`, false, 2},
 		{"Atlas destructive guard", "atlas", "DROP TABLE example;", "", true, 1},
 		{"Ptah destructive guard", "ptah", "DROP TABLE example;", "", true, 1},
 		{"invalid tool", "other", "", "", true, 0},
@@ -87,12 +91,35 @@ func TestDatabaseWorkflow(t *testing.T) {
 			if tt.tool == "atlas" && !bytes.HasPrefix(recorded, []byte("schema\x00diff\x00")) {
 				t.Fatalf("wrong Atlas preview: %q", recorded)
 			}
-			if tt.name == "Ptah production role" && strings.Count(string(recorded), "--var\x00app_role=tasks-role\x00") != 2 {
-				t.Fatalf("production role missing: %q", recorded)
-			}
-			if tt.name == "literal variables" {
-				if strings.Count(string(recorded), "--var\x00value=a b\n$(touch injected)\x00") != 2 {
-					t.Fatalf("variable was split: %q", recorded)
+			if tt.config != "" {
+				var config struct {
+					Database Database
+				}
+				if err := json.Unmarshal([]byte(tt.config), &config); err != nil {
+					t.Fatal(err)
+				}
+				// Both CLIs decode each --var argument as a CSV record before HCL
+				// sees it. Checking argv alone misses truncation at a newline.
+				for invocation := range strings.SplitSeq(strings.TrimSuffix(string(recorded), "\n"), "\x00\n") {
+					args := strings.Split(invocation, "\x00")
+					decoded := map[string]string{}
+					for i, arg := range args {
+						if arg != "--var" {
+							continue
+						}
+						fields, err := csv.NewReader(strings.NewReader(args[i+1])).Read()
+						if err != nil || len(fields) != 1 {
+							t.Fatalf("invalid variable record %q: %v", args[i+1], err)
+						}
+						key, value, found := strings.Cut(fields[0], "=")
+						if !found {
+							t.Fatalf("missing assignment: %q", fields[0])
+						}
+						decoded[key] = value
+					}
+					if !reflect.DeepEqual(decoded, config.Database.Vars) {
+						t.Fatalf("decoded variables = %#v, want %#v", decoded, config.Database.Vars)
+					}
 				}
 				if _, err := os.Stat(filepath.Join(dir, "injected")); !os.IsNotExist(err) {
 					t.Fatal("variable executed shell code")

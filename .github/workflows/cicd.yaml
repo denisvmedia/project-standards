@@ -306,8 +306,9 @@ jobs:
           TOOL: ${{ steps.schema.outputs.tool }}
         run: |
           schema_vars=()
+          # --var uses CSV in both CLIs; encode the assignment before framing argv.
           if [ -f mklv.config.json ]; then
-            jq -j '.database.vars // {} | to_entries[] | "--var\u0000", (.key + "=" + .value + "\u0000")' \
+            jq -j '.database.vars // {} | to_entries[] | "--var\u0000", ([.key + "=" + .value] | @csv), "\u0000"' \
               mklv.config.json > "$RUNNER_TEMP/schema-vars"
             while IFS= read -r -d '' value; do
               schema_vars+=("$value")
